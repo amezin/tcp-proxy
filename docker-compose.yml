@@ -1,0 +1,11 @@
+version: "3.9"
+services:
+  proxy:
+    build:
+      context: .
+      target: proxy
+    network_mode: "host"
+  tox:
+    build:
+      context: .
+      target: tox

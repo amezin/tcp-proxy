@@ -1,0 +1,14 @@
+[tox]
+skipsdist=true
+envlist = py39
+
+[testenv]
+deps =
+  pytest
+  psutil
+changedir = @CMAKE_CURRENT_SOURCE_DIR@
+commands =
+  "@CMAKE_COMMAND@" --build "@CMAKE_CURRENT_BINARY_DIR@"
+  pytest {posargs}
+setenv =
+  PATH = @CMAKE_CURRENT_BINARY_DIR@{:}{env:PATH}
