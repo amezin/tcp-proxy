@@ -7,12 +7,9 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <poll.h>
-#include <unistd.h>
 
 #include "fd.h"
-#include "pipe.h"
-
-static const size_t BUFFER_SIZE = 4096;
+#include "bidirectional_connection.h"
 
 fd tcp_socket(int address_family)
 {
@@ -22,18 +19,6 @@ fd tcp_socket(int address_family)
     }
 
     return sock;
-}
-
-void socket_perror(const fd &sock, const char *msg)
-{
-    int error = 0;
-    socklen_t errlen = sizeof(error);
-    if (getsockopt(sock.get(), SOL_SOCKET, SO_ERROR, (void *)&error, &errlen) != 0) {
-        perror("getsockopt");
-    }
-    if (error) {
-        fprintf(stderr, "%s: %s\n", msg, strerror(error));
-    }
 }
 
 typedef std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> addrinfo_ptr;
@@ -125,76 +110,17 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    my_pipe buffer(BUFFER_SIZE);
-    bool read_down = false;
+    std::vector<pollfd> pollfds;
+    bidirectional_connection conn(std::move(client_sock), std::move(dest_sock));
 
-    enum {
-        POLLFD_CLIENT_SOCK,
-        POLLFD_DEST_SOCK,
-        POLLFD_COUNT
-    };
-
-    pollfd pollfds[POLLFD_COUNT];
-
-    auto &client_sock_pollfd = pollfds[POLLFD_CLIENT_SOCK];
-    client_sock_pollfd.fd = client_sock.get();
-
-    auto &dest_sock_pollfd = pollfds[POLLFD_DEST_SOCK];
-    dest_sock_pollfd.fd = dest_sock.get();
-
-    for (;;) {
-        client_sock_pollfd.events = short((buffer.full() || read_down) ? 0 : POLLIN);
-        dest_sock_pollfd.events = short(buffer.empty() ? 0 : POLLOUT);
-
-        if (poll(pollfds, nfds_t(POLLFD_COUNT), -1) < 0) {
+    while (conn.setup_pollfds(pollfds)) {
+        if (poll(pollfds.data(), pollfds.size(), -1) < 0) {
             perror("poll");
             return EXIT_FAILURE;
         }
 
-        if (client_sock_pollfd.revents & POLLERR) {
-            socket_perror(client_sock, "client socket");
-            return EXIT_FAILURE;
-        }
-
-        if (dest_sock_pollfd.revents & (POLLERR | POLLHUP)) {
-            socket_perror(dest_sock, "dest socket");
-            return EXIT_FAILURE;
-        }
-
-        if (client_sock_pollfd.revents & POLLIN) {
-            auto nrecv = recv(client_sock.get(), buffer.write_pointer(), buffer.available_write(), 0);
-
-            if (nrecv < 0) {
-                perror("recv");
-                return EXIT_FAILURE;
-            }
-
-            if (nrecv == 0) {
-                read_down = true;
-            } else {
-                buffer.written(nrecv);
-            }
-        }
-
-        if (dest_sock_pollfd.revents & POLLOUT) {
-            auto nsent = send(dest_sock.get(), buffer.read_pointer(), buffer.available_read(), MSG_NOSIGNAL);
-
-            if (nsent <= 0) {
-                perror("send");
-                return EXIT_FAILURE;
-            }
-
-            buffer.read(nsent);
-        }
-
-        if (buffer.empty() && read_down) {
-            if (shutdown(dest_sock.get(), SHUT_WR) != 0) {
-                perror("shutdown");
-                return EXIT_FAILURE;
-            }
-
-            return EXIT_SUCCESS;
-        }
+        conn.handle_pollfds(pollfds);
+        pollfds.clear();
     }
 
     return EXIT_SUCCESS;
