@@ -9,7 +9,7 @@ add_compile_options(-Wall -Wextra -Wconversion -Wsign-conversion)
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address -fsanitize=leak")
 set(CMAKE_LINKER_FLAGS_DEBUG "${CMAKE_LINKER_FLAGS_DEBUG} -fno-omit-frame-pointer -fsanitize=address -fsanitize=leak")
 
-add_executable(${PROJECT_NAME} proxy.cpp fd.h fd.cpp)
+add_executable(${PROJECT_NAME} proxy.cpp fd.h fd.cpp pipe.h pipe.cpp)
 
 include(GNUInstallDirs)
 install(TARGETS ${PROJECT_NAME} DESTINATION ${CMAKE_INSTALL_BINDIR})

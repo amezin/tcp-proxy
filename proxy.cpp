@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "fd.h"
+#include "pipe.h"
 
 static const size_t BUFFER_SIZE = 4096;
 
@@ -124,11 +125,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    std::vector<char> buffer(BUFFER_SIZE);
-    char *buffer_begin = buffer.data();
-    char *buffer_end = buffer.data() + buffer.size();
-    char *read_ptr = buffer_begin;
-    char *write_ptr = buffer_begin;
+    my_pipe buffer(BUFFER_SIZE);
     bool read_down = false;
 
     enum {
@@ -146,8 +143,8 @@ int main(int argc, char *argv[])
     dest_sock_pollfd.fd = dest_sock.get();
 
     for (;;) {
-        client_sock_pollfd.events = short((read_ptr < buffer_end && !read_down) ? POLLIN : 0);
-        dest_sock_pollfd.events = short((write_ptr < read_ptr) ? POLLOUT : 0);
+        client_sock_pollfd.events = short((buffer.full() || read_down) ? 0 : POLLIN);
+        dest_sock_pollfd.events = short(buffer.empty() ? 0 : POLLOUT);
 
         if (poll(pollfds, nfds_t(POLLFD_COUNT), -1) < 0) {
             perror("poll");
@@ -165,32 +162,32 @@ int main(int argc, char *argv[])
         }
 
         if (client_sock_pollfd.revents & POLLIN) {
-            auto nread = recv(client_sock.get(), read_ptr, size_t(buffer_end - read_ptr), 0);
-            if (nread < 0) {
+            auto nrecv = recv(client_sock.get(), buffer.write_pointer(), buffer.available_write(), 0);
+
+            if (nrecv < 0) {
                 perror("recv");
                 return EXIT_FAILURE;
             }
-            if (nread == 0) {
+
+            if (nrecv == 0) {
                 read_down = true;
+            } else {
+                buffer.written(nrecv);
             }
-            read_ptr += nread;
         }
 
         if (dest_sock_pollfd.revents & POLLOUT) {
-            auto nsent = send(dest_sock.get(), write_ptr, size_t(read_ptr - write_ptr), MSG_NOSIGNAL);
+            auto nsent = send(dest_sock.get(), buffer.read_pointer(), buffer.available_read(), MSG_NOSIGNAL);
+
             if (nsent <= 0) {
                 perror("send");
                 return EXIT_FAILURE;
             }
-            write_ptr += nsent;
+
+            buffer.read(nsent);
         }
 
-        if (write_ptr == buffer_end) {
-            read_ptr = buffer_begin;
-            write_ptr = buffer_begin;
-        }
-
-        if (write_ptr == read_ptr && read_down) {
+        if (buffer.empty() && read_down) {
             if (shutdown(dest_sock.get(), SHUT_WR) != 0) {
                 perror("shutdown");
                 return EXIT_FAILURE;
