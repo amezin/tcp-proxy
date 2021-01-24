@@ -2,6 +2,7 @@
 
 #include <cstdio>
 
+#include <fcntl.h>
 #include <unistd.h>
 
 bool fd::close()
@@ -18,4 +19,15 @@ bool fd::close()
 
     value = INVALID_VALUE;
     return true;
+}
+
+bool fd::make_nonblocking()
+{
+    int flags = fcntl(value, F_GETFL, 0);
+    if (flags != -1 && fcntl(value, F_SETFL, flags | O_NONBLOCK) == 0) {
+        return true;
+    }
+
+    perror("fcntl(F_SETFL)");
+    return false;
 }

@@ -48,4 +48,5 @@ public:
     }
 
     bool close();
+    bool make_nonblocking();
 };

@@ -1,10 +1,12 @@
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <vector>
 
 #include <sys/socket.h>
 #include <netdb.h>
+#include <poll.h>
 #include <unistd.h>
 
 #include "fd.h"
@@ -19,6 +21,18 @@ fd tcp_socket(int address_family)
     }
 
     return sock;
+}
+
+void socket_perror(const fd &sock, const char *msg)
+{
+    int error = 0;
+    socklen_t errlen = sizeof(error);
+    if (getsockopt(sock.get(), SOL_SOCKET, SO_ERROR, (void *)&error, &errlen) != 0) {
+        perror("getsockopt");
+    }
+    if (error) {
+        fprintf(stderr, "%s: %s\n", msg, strerror(error));
+    }
 }
 
 typedef std::unique_ptr<addrinfo, decltype(&freeaddrinfo)> addrinfo_ptr;
@@ -106,27 +120,83 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    if (!client_sock.make_nonblocking() || !dest_sock.make_nonblocking()) {
+        return EXIT_FAILURE;
+    }
+
     std::vector<char> buffer(BUFFER_SIZE);
+    char *buffer_begin = buffer.data();
+    char *buffer_end = buffer.data() + buffer.size();
+    char *read_ptr = buffer_begin;
+    char *write_ptr = buffer_begin;
+    bool read_down = false;
+
+    enum {
+        POLLFD_CLIENT_SOCK,
+        POLLFD_DEST_SOCK,
+        POLLFD_COUNT
+    };
+
+    pollfd pollfds[POLLFD_COUNT];
+
+    auto &client_sock_pollfd = pollfds[POLLFD_CLIENT_SOCK];
+    client_sock_pollfd.fd = client_sock.get();
+
+    auto &dest_sock_pollfd = pollfds[POLLFD_DEST_SOCK];
+    dest_sock_pollfd.fd = dest_sock.get();
+
     for (;;) {
-        auto nbuffered = recv(client_sock.get(), buffer.data(), buffer.size(), 0);
-        if (nbuffered < 0) {
-            perror("recv");
+        client_sock_pollfd.events = short((read_ptr < buffer_end && !read_down) ? POLLIN : 0);
+        dest_sock_pollfd.events = short((write_ptr < read_ptr) ? POLLOUT : 0);
+
+        if (poll(pollfds, nfds_t(POLLFD_COUNT), -1) < 0) {
+            perror("poll");
             return EXIT_FAILURE;
         }
-        if (nbuffered == 0) {
-            if (shutdown(dest_sock.get(), SHUT_WR) != 0) {
-                perror("shutdown");
+
+        if (client_sock_pollfd.revents & POLLERR) {
+            socket_perror(client_sock, "client socket");
+            return EXIT_FAILURE;
+        }
+
+        if (dest_sock_pollfd.revents & (POLLERR | POLLHUP)) {
+            socket_perror(dest_sock, "dest socket");
+            return EXIT_FAILURE;
+        }
+
+        if (client_sock_pollfd.revents & POLLIN) {
+            auto nread = recv(client_sock.get(), read_ptr, size_t(buffer_end - read_ptr), 0);
+            if (nread < 0) {
+                perror("recv");
                 return EXIT_FAILURE;
             }
-            break;
+            if (nread == 0) {
+                read_down = true;
+            }
+            read_ptr += nread;
         }
-        while (nbuffered) {
-            auto nsent = send(dest_sock.get(), buffer.data(), size_t(nbuffered), MSG_NOSIGNAL);
+
+        if (dest_sock_pollfd.revents & POLLOUT) {
+            auto nsent = send(dest_sock.get(), write_ptr, size_t(read_ptr - write_ptr), MSG_NOSIGNAL);
             if (nsent <= 0) {
                 perror("send");
                 return EXIT_FAILURE;
             }
-            nbuffered -= nsent;
+            write_ptr += nsent;
+        }
+
+        if (write_ptr == buffer_end) {
+            read_ptr = buffer_begin;
+            write_ptr = buffer_begin;
+        }
+
+        if (write_ptr == read_ptr && read_down) {
+            if (shutdown(dest_sock.get(), SHUT_WR) != 0) {
+                perror("shutdown");
+                return EXIT_FAILURE;
+            }
+
+            return EXIT_SUCCESS;
         }
     }
 
