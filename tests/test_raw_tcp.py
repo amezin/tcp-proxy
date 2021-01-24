@@ -1,13 +1,11 @@
 import concurrent.futures
-import contextlib
 import logging
 import random
 import socket
-import subprocess
-import time
 
-import psutil
 import pytest
+
+from . import util
 
 
 RAND = random.Random(0)
@@ -17,34 +15,6 @@ MAX_CHUNK = 8192
 
 LOG = logging.getLogger(__name__)
 LOG.setLevel(logging.INFO)
-
-
-def shutdown_process(popen):
-    try:
-        popen.wait(timeout=0.2)
-    except psutil.TimeoutExpired:
-        popen.terminate()
-
-        try:
-            popen.wait(timeout=0.2)
-        except psutil.TimeoutExpired:
-            popen.kill()
-            raise
-
-
-def wait_tcp_listen(popen, port=None):
-    proc = psutil.Process(popen.pid)
-    while popen.poll() == None:
-        for conn in proc.connections('tcp'):
-            if conn.status != psutil.CONN_LISTEN:
-                continue
-
-            if (port is None) or (conn.laddr[1] == port):
-                return conn.laddr
-
-        time.sleep(0.01)
-
-    pytest.fail(f'Process {popen.pid} is not running')
 
 
 def recvall(sock, rand, maxlen=None, minrecv=MIN_CHUNK, maxrecv=MAX_CHUNK):
@@ -90,26 +60,6 @@ def threadpool():
         yield executor.submit
 
 
-@pytest.fixture
-def subprocess_launcher():
-    with contextlib.ExitStack() as stack:
-
-        def launch(*args, **kwargs):
-            popen = psutil.Popen(*args, **kwargs)
-            stack.callback(shutdown_process, popen)
-            return popen
-
-        yield launch
-
-
-@pytest.fixture
-def proxy_launcher(subprocess_launcher):
-    def launch(*, proxy_host='localhost', proxy_port=0, target_host='localhost', target_port):
-        return subprocess_launcher(['proxy', proxy_host, str(proxy_port), target_host, str(target_port)])
-
-    return launch
-
-
 @pytest.mark.parametrize('data', [b'testdata', b'', pytest.param(TEST_BLOB, id='blob')])
 def test_client_send_server_recv(data, proxy_launcher, server_socket, threadpool):
     server_addr = server_socket.getsockname()
@@ -124,13 +74,12 @@ def test_client_send_server_recv(data, proxy_launcher, server_socket, threadpool
     server_fut = threadpool(server)
 
     proxy = proxy_launcher(target_host=server_addr[0], target_port=server_addr[1])
-    proxy_addr = wait_tcp_listen(proxy)
+    proxy_addr = util.wait_tcp_listen(proxy)
 
     with socket.create_connection(proxy_addr, timeout=10) as client_socket:
         sendall(client_socket, data, rand)
 
     assert server_fut.result() == data
-    assert proxy.wait() == 0
 
 
 @pytest.mark.parametrize('data', [b'testdata', b'', pytest.param(TEST_BLOB, id='blob')])
@@ -147,13 +96,12 @@ def test_client_recv_server_send(data, proxy_launcher, server_socket, threadpool
     server_fut = threadpool(server)
 
     proxy = proxy_launcher(target_host=server_addr[0], target_port=server_addr[1])
-    proxy_addr = wait_tcp_listen(proxy)
+    proxy_addr = util.wait_tcp_listen(proxy)
 
     with socket.create_connection(proxy_addr, timeout=10) as client_socket:
         assert recvall(client_socket, rand) == data
 
     server_fut.result()
-    assert proxy.wait() == 0
 
 
 def test_echo_server(proxy_launcher, server_socket, threadpool):
@@ -179,7 +127,7 @@ def test_echo_server(proxy_launcher, server_socket, threadpool):
     server_fut = threadpool(server)
 
     proxy = proxy_launcher(target_host=server_addr[0], target_port=server_addr[1])
-    proxy_addr = wait_tcp_listen(proxy)
+    proxy_addr = util.wait_tcp_listen(proxy)
 
     with socket.create_connection(proxy_addr, timeout=10) as client_socket:
         for msg in data:
@@ -187,4 +135,3 @@ def test_echo_server(proxy_launcher, server_socket, threadpool):
             assert recvall(client_socket, rand, len(msg)) == msg
 
     server_fut.result()
-    assert proxy.wait() == 0

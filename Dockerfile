@@ -13,7 +13,7 @@ ENTRYPOINT ["/usr/local/bin/proxy"]
 
 FROM proxy AS tox
 
-RUN dnf install -y --setopt=install_weak_deps=False tox python39
+RUN dnf install -y --setopt=install_weak_deps=False tox python39 iperf3
 
 WORKDIR /usr/src/proxy/build
 ENTRYPOINT ["tox"]
