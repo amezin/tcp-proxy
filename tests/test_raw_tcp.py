@@ -68,6 +68,7 @@ def test_client_send_server_recv(data, proxy_launcher, server_socket, threadpool
     def server():
         client_socket, _ = server_socket.accept()
         client_socket.settimeout(10)
+        rand = random.Random(2)
         with client_socket:
             return recvall(client_socket, rand)
 
@@ -85,11 +86,12 @@ def test_client_send_server_recv(data, proxy_launcher, server_socket, threadpool
 @pytest.mark.parametrize('data', [b'testdata', b'', pytest.param(TEST_BLOB, id='blob')])
 def test_client_recv_server_send(data, proxy_launcher, server_socket, threadpool):
     server_addr = server_socket.getsockname()
-    rand = random.Random(2)
+    rand = random.Random(3)
 
     def server():
         client_socket, _ = server_socket.accept()
         client_socket.settimeout(10)
+        rand = random.Random(4)
         with client_socket:
             sendall(client_socket, data, rand)
 
@@ -106,7 +108,7 @@ def test_client_recv_server_send(data, proxy_launcher, server_socket, threadpool
 
 def test_echo_server(proxy_launcher, server_socket, threadpool):
     server_addr = server_socket.getsockname()
-    rand = random.Random(2)
+    rand = random.Random(5)
 
     data = [
         b'testdata',
@@ -118,6 +120,7 @@ def test_echo_server(proxy_launcher, server_socket, threadpool):
     def server():
         client_socket, _ = server_socket.accept()
         client_socket.settimeout(10)
+        rand = random.Random(6)
         with client_socket:
             for msg in data:
                 recvd = recvall(client_socket, rand, len(msg))
